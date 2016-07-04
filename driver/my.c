@@ -191,7 +191,7 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 		res = -ENOMEM;
 		goto err1;
 	}
-	printk( "Allocated DMA buffer at phys:%llu virt:%llu\n",dmaddr,dmabuf_descriptor);
+	printk( "Allocated DMA buffer at phys:%llx virt:%llx\n",dmaddr,dmabuf_descriptor);
 	res = pci_request_regions(pdev,DEVICE_NAME);
 	if(res)
 		goto err1;
