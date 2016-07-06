@@ -43,8 +43,8 @@ struct cdev *my_cdev = NULL;
 static struct class *my_class = NULL;
 
 ///////////////////////////
-static struct kobject *example_kobj;
-static uint32_t foo,bar;
+static uint32_t foo;
+static char bar[10];
 static ssize_t foo_show(struct kobject *kobj, struct kobj_attribute *attr,
 			char *buf)
 {
@@ -70,19 +70,15 @@ static struct kobj_attribute foo_attribute =
 static ssize_t b_show(struct kobject *kobj, struct kobj_attribute *attr,
 		      char *buf)
 {
-	int var;
+	char *var;
 	var = bar;
-	return sprintf(buf, "%d\n", var);
+	return sprintf(buf, "%s\n", var);
 }
 
 static ssize_t b_store(struct kobject *kobj, struct kobj_attribute *attr,
 		       const char *buf, size_t count)
 {
-	int var, ret;
-	ret = kstrtoint(buf, 10, &var);
-	if (ret < 0)
-		return ret;
-	bar = var;
+	strncpy(bar, buf , 10);
 	return count;
 }
 static struct kobj_attribute bar_attribute =
@@ -95,23 +91,89 @@ static struct attribute *attrs[] = {
 static struct attribute_group attr_group = {
 	.attrs = attrs,
 };
+static const struct attribute_group *attrr_group[]={
+	&attr_group,
+	NULL,
+};
 
 void test111(void)
 {
 	uint32_t temp;
-	uint32_t *now = (uint32_t *)dmabuf_descriptor;
-	now[0]=0x00112233;
-	now[4]=0x44556677;
-	now[8]=0x8899;
+	bmem[0x8000/4] = bmem[0x8000/4] | 0x00000004;
+	//while (bmem[0x8000/4] & 0x00000004);
+	//printk("Wait \n");
+	//printk("Wait \n");
+	printk("S:%x\n",bmem[0x8004/4]);
 	bmem[0x8004/4] = 0x00001000;
+	bmem[0x8004/4] = 0x00004000;
+	printk("C:%x\n",bmem[0x8000/4]);
+	printk("S:%x\n",bmem[0x8004/4]);
 	temp = bmem[0x8000/4];
-	bmem[0x8000/4] = temp | 0x00001000;
-	bmem[0x8020/4]=0x30000050;
-	bmem[0x8024/4]=0x00000000;
-	bmem[0x8018/4]=(dmaddr && 0xFFFFFFFF);
-	bmem[0x801C/4]=dmaddr>>32;
-	bmem[0x8028/4]=0x00000009;
-	printk("<1>Test Complete!!! %u",now[0]);
+	temp = temp | 0x00005008;
+	temp = temp & 0xFF00FFFF;
+	temp = temp | 0x00020000;
+	bmem[0x8000/4] = temp;
+	printk("C:%x\n",bmem[0x8000/4]);
+	printk("S:%x\n",bmem[0x8004/4]);
+//	bmem[0x7FF8/4]=(dmaddr & 0x00000000FFFFFFFF);
+//	bmem[0x7FFC/4]=dmaddr >> 32;
+	bmem[0x920C/4]=(dmaddr & 0x00000000FFFFFFFF);
+	bmem[0x9208/4]=dmaddr >> 32;
+
+/*	bmem[0x0040/4]=0x41000080;
+	bmem[0x0044/4]=0x00000000;
+	bmem[0x0048/4]=0x41007FFC;
+	bmem[0x004C/4]=0x00000000;
+	bmem[0x0050/4]=0x41008208;
+	bmem[0x0054/4]=0x00000000;
+	bmem[0x0058/4]=0x00000004;
+
+	bmem[0x0000/4]=0x41000040;
+	bmem[0x0004/4]=0x00000000;
+	bmem[0x0008/4]=0x41007FF8;
+	bmem[0x000C/4]=0x00000000;
+	bmem[0x0010/4]=0x4100820C;
+	bmem[0x0014/4]=0x00000000;
+	bmem[0x0018/4]=0x00000004;*/
+	
+	bmem[0x4000/4]=0x41114111;
+	bmem[0x4004/4]=0x51115111;
+	bmem[0x4008/4]=0x61114678;
+
+	bmem[0x0080/4]=0x820000C0;
+	bmem[0x0084/4]=0x00000000;
+	bmem[0x0088/4]=0x82004000;
+	bmem[0x008C/4]=0x00000000;
+	bmem[0x0090/4]=0x82004020;
+	bmem[0x0094/4]=0x00000000;
+	bmem[0x0098/4]=0x0000000A;
+	bmem[0x009C/4]=0x00000000;
+
+	bmem[0x00C0/4]=0x82000050;
+	bmem[0x00C4/4]=0x00000000;
+	bmem[0x00C8/4]=0x82004020;
+	bmem[0x00CC/4]=0x00000000;
+	bmem[0x00D0/4]=0x82004040;
+	bmem[0x00D4/4]=0x00000000;
+	bmem[0x00D8/4]=0x0000000A;
+	bmem[0x00DC/4]=0x00000000;
+
+	bmem[0x8008/4]=0x82000080;
+	bmem[0x800C/4]=0x00000000;
+	bmem[0x8010/4]=0x820000C0;
+	bmem[0x8014/4]=0x00000000;
+
+	// bmem[0x0000/4]=0x41223344;
+	// bmem[0x0004/4]=0x51223344;
+	// bmem[0x0008/4]=0x61223374;
+
+	// bmem[0x8018/4]=0x41000000;
+	// bmem[0x801C/4]=0x00000000;
+	// bmem[0x8020/4]=0x40000000;
+	// bmem[0x8024/4]=0x00000000;
+	// bmem[0x8028/4]=0x0000000A;
+
+	printk("<1>Test Complete!!!");
 }
 
 
@@ -147,7 +209,7 @@ int devfs_mmap(struct file *filp , struct vm_area_struct *vma)
 
 static irqreturn_t irq_handler(int irq,void *dev_id)
 {
-	bmem[0x0010/4]=0x02222222; // just for debugging 
+	bmem[0x0010/4]=0x82222222; // just for debugging 
 	return IRQ_HANDLED;
 }
 static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
@@ -214,6 +276,10 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 		res = PTR_ERR(my_class);
 		goto err1;
 	}
+	if(!(my_class -> dev_groups)){
+		printk("It is NULL2\n");
+		my_class -> dev_groups = attrr_group;
+	}
 	res = alloc_chrdev_region(&my_dev,0,1,DEVICE_NAME);
 	if(res){
 		printk ("<1>Allocation of the device number for %s failed\n",DEVICE_NAME);
@@ -235,16 +301,6 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 	printk( "MAJOR %s is %d\n",DEVICE_NAME,MAJOR(my_dev));
 
 	//////////////////////
-	example_kobj = kobject_create_and_add("check11",my_class -> dev_kobj);
-	if (!example_kobj){
-		res = -ENOMEM;
-		goto err1;
-	}
-	res = sysfs_create_group(example_kobj, &attr_group);
-	if (res){
-		kobject_put(example_kobj);
-		goto err1;
-	}
 	test111();
 	//////////////////////
 
@@ -262,8 +318,6 @@ err1:
 void my_pci_remove(struct pci_dev *pdev)
 {
 	free_irq(pdev->irq,NULL);
-	sysfs_create_group(example_kobj, &attr_group);
-	kobject_put(example_kobj);
 	if(my_dev && my_class)
 		device_destroy(my_class , my_dev);
 	if(my_cdev){
