@@ -31,61 +31,87 @@ MODULE_DEVICE_TABLE(pci,my_pci_tbl);
 #define N_OF_RES (1)
 //change the foll after more bars needed
 #define CURR_RES 0
+#define N_BUF 2
 static short res_nums[]={0};
 static resource_size_t mmio_start[N_OF_RES] , mmio_end[N_OF_RES] , 
 			mmio_flags[N_OF_RES] , mmio_len[N_OF_RES] ;
-
-static dma_addr_t dmaddr = 0 ;
 static uint32_t *bmem = NULL;
 static void *dmabuf_descriptor = NULL;
 dev_t my_dev = 0;
 struct cdev *my_cdev = NULL;
 static struct class *my_class = NULL;
-
+static uint64_t baraddr[N_OF_RES];
+static struct pci_dev *glob_pci ;
+static dma_addr_t dmaddr_descriptor , dmaddr_buf[N_BUF];
+static void *dmakvirt_buf[N_BUF] , *dmakvirt_descriptor;
 ///////////////////////////
-static uint32_t foo;
-static char bar[10];
-static ssize_t foo_show(struct kobject *kobj, struct kobj_attribute *attr,
+static uint32_t size_buf1,size_buf2;
+static ssize_t size_show(struct kobject *kobj, struct kobj_attribute *attr,
 			char *buf)
 {
-	return sprintf(buf, "%d\n", foo);
+	return sprintf(buf, "%d\n", size_buf1);
 }
 
-static ssize_t foo_store(struct kobject *kobj, struct kobj_attribute *attr,
+static ssize_t size_store(struct kobject *kobj, struct kobj_attribute *attr,
 			 const char *buf, size_t count)
 {
 	int ret;
-
-	ret = kstrtoint(buf, 10, &foo);
+	ret = kstrtoint(buf, 10, &size_buf1);
 	if (ret < 0)
 		return ret;
-
+	if((size_buf1 > 1073741824) || (size_buf1 < 4096))
+		return -EINVAL;
 	return count;
 }
 
-static struct kobj_attribute foo_attribute =
-	__ATTR(foo, 0664, foo_show, foo_store);
+static struct kobj_attribute size_buf1_attribute =
+	__ATTR(size_buf1, 0664, size_show, size_store);
 
+static ssize_t size_show1(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf)
+{
+	return sprintf(buf, "%d\n", size_buf2);
+}
+
+static ssize_t size_store1(struct kobject *kobj, struct kobj_attribute *attr,
+			 const char *buf, size_t count)
+{
+	int ret;
+	ret = kstrtoint(buf, 10, &size_buf2);
+	if (ret < 0)
+		return ret;
+	if((size_buf2 > 1073741824) || (size_buf2 < 4096))
+		return -EINVAL;
+	return count;
+}
+
+static struct kobj_attribute size_buf2_attribute =
+	__ATTR(size_buf2, 0664, size_show1, size_store1);
 
 static ssize_t b_show(struct kobject *kobj, struct kobj_attribute *attr,
 		      char *buf)
 {
-	char *var;
-	var = bar;
-	return sprintf(buf, "%s\n", var);
+	if(attr == (&buf_bram_attribute))
+		sprintf(buf, "%llx\n", dmaddr_descriptor);
+	if(attr == (&buf1_attribute))
+		sprintf(buf, "%llx\n", dmaddr_buf[0]);
+	if(attr == (&buf2_attribute))
+		sprintf(buf, "%llx\n", dmaddr_buf[1]);
 }
 
-static ssize_t b_store(struct kobject *kobj, struct kobj_attribute *attr,
-		       const char *buf, size_t count)
-{
-	strncpy(bar, buf , 10);
-	return count;
-}
-static struct kobj_attribute bar_attribute =
-	__ATTR(bar, 0664, b_show, b_store);
+static struct kobj_attribute buf_bram_attribute =
+	__ATTR(buf_bram, 0440, b_show, NULL);
+static struct kobj_attribute buf1_attribute =
+	__ATTR(buf1, 0440, b_show, NULL);
+static struct kobj_attribute buf2_attribute =
+	__ATTR(buf2, 0440, b_show, NULL);
+
 static struct attribute *attrs[] = {
-	&foo_attribute.attr,
-	&bar_attribute.attr,
+	&size_buf1_attribute.attr,
+	&size_buf2_attribute.attr,
+	&buf_bram_attribute,
+	&buf1_attribute,
+	&buf2_attribute,
 	NULL,	/* need to NULL terminate the list of attributes */
 };
 static struct attribute_group attr_group = {
@@ -115,8 +141,6 @@ void test111(void)
 	bmem[0x8000/4] = temp;
 	printk("C:%x\n",bmem[0x8000/4]);
 	printk("S:%x\n",bmem[0x8004/4]);
-//	bmem[0x7FF8/4]=(dmaddr & 0x00000000FFFFFFFF);
-//	bmem[0x7FFC/4]=dmaddr >> 32;
 	bmem[0x920C/4]=(dmaddr & 0x00000000FFFFFFFF);
 	bmem[0x9208/4]=dmaddr >> 32;
 
@@ -176,7 +200,6 @@ void test111(void)
 	printk("<1>Test Complete!!!");
 }
 
-
 ///////////////////////////////////
 
 static int devfs_open(struct inode *inode , struct file *file);
@@ -186,35 +209,78 @@ int devfs_mmap(struct file *filp , struct vm_area_struct *vma);
 struct file_operations devfsops = {
 	.owner = THIS_MODULE,
 	.open = devfs_open,
-	.mmap = devfs_mmap 
+	.mmap = devfs_mmap,
+	.release = devfs_release
 };
 
-static int devfs_open(struct inode *inode , struct file *file)
+static int devfs_open(struct inode *inode , struct file *filp)
 {
-	nonseekable_open(inode , file);
+	nonseekable_open(inode , filp);
 	return 0;
 }
 
-int devfs_mmap(struct file *filp , struct vm_area_struct *vma)
+static int devfs_release(struct inode *inode , struct file *filp)
 {
-	//iminor(filp->f_path.dentry->d_inode) to get the minor number
+	uint8_t minor_filp = iminor(filp->f_path.dentry->d_inode) - 7;
+	if(minor_filp == 0)
+		dma_free_coherent(&pdev->dev,BRAM_SIZE,dmakvirt_descriptor,dmaddr_descriptor);
+	else if((minor_filp == 1) || (minor_filp == 2))
+		dma_free_coherent(&pdev->dev,(minor_filp == 1)?size_buf1:size_buf2,dmakvirt_buf[minor_filp],dmaddr_buf[minor_filp]);
+	printk("DMA Descriptor buffer area free'ed\n");
+	return 0;
+}
+static int devfs_mmap(struct file *filp , struct vm_area_struct *vma)
+{
+	uint8_t minor_filp = iminor(filp->f_path.dentry->d_inode) - 7;
 	unsigned long vsize ;
 	vsize = vma->vm_end - vma->vm_start ;
-	if(vsize > mmio_len[CURR_RES])
+	if(minor_filp<6){
+		if(vsize > mmio_len[CURR_RES])
+			return -EINVAL;
+		io_remap_pfn_range(vma,vma->vm_start, (mmio_start[minor_filp]) >> PAGE_SHIFT , vsize, vma->vm_page_prot);
+		printk ("<1>BAR%u seems to be mapped\n",minor_filp);	
+	}
+	else if(minor_filp == 0){
+		//allocatte and mmap BRAM buffer 
+		dmakvirt_descriptor = dma_alloc_coherent(&glob_pci->dev,BRAM_SIZE,&dmaddr_descriptor,GFP_USER);
+		if((dmakvirt_descriptor==NULL) || (vsize > BRAM_SIZE)){
+			printk( "No DMA buffer allocated\n");
+			return -ENOMEM;
+		}
+		if(!dma_mmap_coherent(&glob_pci->dev,vma,dmakvirt_descriptor,dmaddr_descriptor,vsize)){
+			printk( "Allocated DMA Descriptor buffer at phys:%llx virt:%llx\n",dmaddr_descriptor,dmakvirt_descriptor);
+      		return 0;
+		}
 		return -EINVAL;
-	io_remap_pfn_range(vma,vma->vm_start, (mmio_start[CURR_RES]) >> PAGE_SHIFT , vsize, vma->vm_page_prot);
-	printk ("<1>BAR0 seems to be mapped\n");
-	return 0;
+		//remap_pfn_range(vma,vma->vm_start, virt_to_phys() >> PAGE_SHIFT , vsize, vma->vm_page_prot);
+	}
+	else if((minor_filp == 1) || (minor_filp == 2)){
+		uint32_t asize = (minor_filp == 1)?size_buf1:size_buf2;
+		dmakvirt_buf[minor_filp] = dma_alloc_coherent(&glob_pci->dev,asize,&dmaddr_buf[minor_filp],GFP_USER);
+		if((dmakvirt_buf[minor_filp]==NULL) || (vsize > asize){
+			printk(KERN_ERR "No DMA buffer allocated or Invalid mmap size\n");
+			return -ENOMEM;
+		}if(!dma_mmap_coherent(&glob_pci->dev,vma,dmakvirt_buf[minor_filp],dmaddr_buf[minor_filp],vsize)){
+			printk( "Allocated DMA Descriptor buffer at phys:%llx virt:%llx\n",dmaddr_buf[minor_filp],dmakvirt_buf[minor_filp]);
+      		return 0;
+		}
+		return -EINVAL;
+		//remap_pfn_range(vma,vma->vm_start, dmaddr_buf[minor_filp] >> PAGE_SHIFT , vsize, vma->vm_page_prot);
+		printk("Allocated DMA buffer %d at phys:%llx virt:%llx\n",minor_filp,dmaddr_buf[minor_filp],dmakvirt_buf[minor_filp]);
+	}
+	return -EINVAL;
 }
 
 static irqreturn_t irq_handler(int irq,void *dev_id)
 {
-	bmem[0x0010/4]=0x82222222; // just for debugging 
+	bmem[0x0000/4]=0x82222232; // just for debugging 
 	return IRQ_HANDLED;
 }
+
 static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 {
 	int i , res = -1;
+	glob_pci = pdev;
 	printk ("<1>before pci enable \n");
 	if(pci_enable_device(pdev))
 	{
@@ -245,15 +311,7 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 		if(pci_set_consistent_dma_mask(pdev,DMA_BIT_MASK(32)))
 		dev_info(&pdev->dev,"Unable to obtain 64bit dma for consistent allocations \n");
 		goto err1;
-	} 
-	//allocatte BRAM buffer 
-	dmabuf_descriptor = dma_alloc_coherent(&pdev->dev,BRAM_SIZE,&dmaddr,GFP_USER);
-	if(dmabuf_descriptor==NULL){
-		printk( "No DMA buffer allocated\n");
-		res = -ENOMEM;
-		goto err1;
 	}
-	printk( "Allocated DMA buffer at phys:%llx virt:%llx\n",dmaddr,dmabuf_descriptor);
 	res = pci_request_regions(pdev,DEVICE_NAME);
 	if(res)
 		goto err1;
@@ -354,6 +412,8 @@ static int __init my_pci_init(void)
 }
 static void __exit my_pci_exit(void)
 {
+	if(my_class != NULL)
+		my_pci_remove(glob_pci);
 	pci_unregister_driver(&my_pci_driver);
 }
 module_init(my_pci_init);
