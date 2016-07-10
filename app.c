@@ -1,15 +1,15 @@
-#include <sys/types.h>
 #include <stdio.h>
 #include <time.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <stdint.h>
-#include "unistd.h"
-#include "inttypes.h"
+#include <unistd.h>
 #include <sys/stat.h>
-#include <sys/types.h>
+#include <stdbool.h>
+#include <time.h>
+#include <signal.h>
+
 #define MKDEV(ma,mi)  (((ma) << 20) | (mi))
 
 #define BAR0_S_AXI_CDMA_CDMACR 0x8000
@@ -48,8 +48,18 @@
 #define AXIBAR0 64*1024
 #define AXIBAR1 8*1024*1024
 
+bool conditio = false;
+clock_t begin , end ;
+void my_action(int num)
+{
+	printf("Interrupt recieved by userspace \n");
+	conditio = true;
+	end = clock();
+}
+
 void dma_engine_sg_init(uint32_t *bar0,int num_desc)
 {
+	uint32_t temp ;
 	bar0[BAR0_S_AXI_CDMA_CDMACR/4] = bar0[BAR0_S_AXI_CDMA_CDMACR/4] | 0x00000004; // Soft reset cdma 
 	bar0[BAR0_S_AXI_CDMA_CDMASR/4] = 0x00001000;//clear any previous ioc interrupt
 	bar0[BAR0_S_AXI_CDMA_CDMASR/4] = 0x00004000;//clear any previous err interrupt
@@ -60,7 +70,7 @@ void dma_engine_sg_init(uint32_t *bar0,int num_desc)
 	bar0[BAR0_S_AXI_CDMA_CDMACR/4] = temp;
 }
 
-void dma_engine_dma_init()
+void dma_engine_dma_init(uint32_t *bar0)
 {
 	bar0[BAR0_S_AXI_CDMA_CDMACR/4] = bar0[BAR0_S_AXI_CDMA_CDMACR/4] | 0x00000004; // Soft reset cdma 
 	bar0[BAR0_S_AXI_CDMA_CDMASR/4] = 0x00001000;//clear any previous ioc interrupt
@@ -72,7 +82,7 @@ void build_store_desc(uint32_t *store_desc_at,uint32_t nxt,uint32_t sa,uint32_t 
 {
 	store_desc_at[CDMA_DESC_NEXTDESC_PTR_MSB/4]=0;
 	store_desc_at[CDMA_DESC_DA_MSB/4]=0;
-	store_desc_at[CDMA_DESC_SA_MSB/4]=0
+	store_desc_at[CDMA_DESC_SA_MSB/4]=0;
 	store_desc_at[CDMA_DESC_STATUS/4]=0;
 	store_desc_at[CDMA_DESC_NEXTDESC_PTR/4]=nxt;
 	store_desc_at[CDMA_DESC_DA/4]=da;
@@ -157,11 +167,14 @@ opened1:
 		printf("mmap /dev/my_pci2 returned NULL\n");
 		exit(1);
 	}
+	signal(SIGUSR1,my_action);
 
 //////////////////////////// CUSTOM LOGIC ////////////////////////
 
-////////////////////////////	          ////////////////////////
+	begin = clock();
 
+////////////////////////////	          ////////////////////////
+	printf("Bravo!!!!!! time elapsed since inception : %.4f \n",(float)(begin - end)/CLOCKS_PER_SEC );
 	close (f2);
 	close (f1);
 	close (f);

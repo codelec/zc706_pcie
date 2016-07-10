@@ -237,7 +237,7 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 	printk( "MAJOR %s is %d\n",DEVICE_NAME,MAJOR(my_dev));
 	printk ("Done Probing \n");
 	memset(&sinfo,0,sizeof(struct siginfo));
-	sinfo.si_signo = SIGIO;
+	sinfo.si_signo = SIGUSR1;
 	sinfo.si_code = SI_USER;
 	return 0;
 err1:
