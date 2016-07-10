@@ -1,80 +1,84 @@
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/kobject.h>
-#include <linux/string.h>
-#include <linux/sysfs.h>
-#include <linux/init.h>
-#include <linux/device.h>
-#include <linux/fs.h>
-#include <linux/cdev.h>
-#include <linux/mm.h>
-#include <linux/pci.h>
-#include <linux/interrupt.h>
-#include <asm/cacheflush.h>
-#include <linux/sched.h>
-//PCI IDs below are not registered! Use only for experiments 
+#include <linux/kernel.h>                //   |
+#include <linux/module.h>                //   |  BASIC NECESSITY
+#include <linux/init.h>                  //   |  
+#include <linux/kobject.h> //kobject used to build the hierarchy seen in /sys
+#include <linux/string.h> // kstrtoint
+#include <linux/sysfs.h> // class attributes in sysfs
+#include <linux/device.h> // struct dev used by many functions
+#include <linux/fs.h> // devfs file_operations 
+#include <linux/cdev.h> // cdev_add , alloc_chrdev_region
+#include <linux/pci.h> // pci_device_enable , pci_msi_enable and all other pci_*
+#include <linux/interrupt.h> // request_irq 
+#include <asm/cacheflush.h> // set_memory_uc ,  set_memory_wb , set_memory_wc
+#include <linux/sched.h> // send_sig_info , signal attributes 
 
+// PCI IDs below are not registered! Use only for experiments 
+// PCI_*_ID changed to make sure only this module gets loaded
 #define PCI_VENDOR_ID_MY 0xABBA
 #define PCI_DEVICE_ID_MY 0x7022
-#define PCI_SUBSYSTEM_VENDOR_ID_MY 0x10EE
-#define PCI_SUBSYSTEM_DEVICE_ID_MY 0x0007
-#define CLASS_CODE 0x058000
-
+//kernel pci device driver support registry 
 static DEFINE_PCI_DEVICE_TABLE(my_pci_tbl) = {
 	{PCI_VENDOR_ID_MY,PCI_DEVICE_ID_MY,PCI_ANY_ID,PCI_ANY_ID,0,0,0},{0,}};
 MODULE_DEVICE_TABLE(pci,my_pci_tbl);
 #define DEVICE_NAME "my_pci"
-//for now the number of BAR only one
-#define N_OF_RES (2)
+#define N_BUF 2 //NUM of AXIBAR2PCIE used
+#define N_OF_RES 2 //NUM of PCIE BAR
 //since 64 bits BARS used
 static short res_nums[N_OF_RES]={0,2};
-#define N_BUF 2
 static resource_size_t mmio_start[N_OF_RES] , mmio_end[N_OF_RES] , 
 			mmio_flags[N_OF_RES] , mmio_len[N_OF_RES] ;
-static uint32_t *bmem = NULL;
-dev_t my_dev = 0;
-struct cdev *my_cdev = NULL;
+static uint32_t *bmem = NULL; //just to test the access of PCIE BAR
+dev_t my_dev = 0;//stores the major and minor allocated to the character device
+struct cdev *my_cdev = NULL;//package of all the contents to access the character device
 static struct class *my_class = NULL;
-static struct pci_dev *glob_pci ;
-static dma_addr_t dmaddr_buf[N_BUF];
-static void *dmakvirt_buf[N_BUF];
+static struct pci_dev *glob_pci; //encapsulation of struct dev with pci specific addons
+static dma_addr_t dmaddr_buf[N_BUF]; //dma bus address of buffer handed over to device 
+static void *dmakvirt_buf[N_BUF]; //virtual address of buffer mapped into kernel address space 
 static uint32_t size_buf[N_BUF];
-static struct siginfo sinfo;
-pid_t pid_user;
-struct task_struct *task;
+static struct siginfo sinfo;//to store info of signal to be sent to user space 
+pid_t pid_user;//pid of user space process to trigger signal to incase of interrupt 
+struct task_struct *task;//task_struct of user space process
 
 static ssize_t attr_show(struct kobject *, struct kobj_attribute *,char *);
 static ssize_t attr_store(struct kobject *, struct kobj_attribute *,const char *,size_t);
+
+static struct kobj_attribute size_buf0_attribute =
+	__ATTR(size_buf0, 0664, attr_show, attr_store);
 static struct kobj_attribute size_buf1_attribute =
 	__ATTR(size_buf1, 0664, attr_show, attr_store);
-static struct kobj_attribute size_buf2_attribute =
-	__ATTR(size_buf2, 0664, attr_show, attr_store);
 static struct kobj_attribute reg_inter_attribute =
 	__ATTR(reg_interrupt, 0664, attr_show, attr_store);	
+static struct kobj_attribute buf0_attribute =
+	__ATTR(buf0, 0440, attr_show, NULL);
 static struct kobj_attribute buf1_attribute =
 	__ATTR(buf1, 0440, attr_show, NULL);
-static struct kobj_attribute buf2_attribute =
-	__ATTR(buf2, 0440, attr_show, NULL);
 
+/**
+ * @brief      Based on the value of attr the correct kernel variable is filled
+ *             into buffer
+ */
 static ssize_t attr_show(struct kobject *kobj, struct kobj_attribute *attr , char *buf)
 {
-	if(attr == (&size_buf1_attribute))
+	if(attr == (&size_buf0_attribute))
 		return sprintf(buf, "%d\n", size_buf[0]);
-	if(attr == (&size_buf2_attribute))
+	if(attr == (&size_buf1_attribute))
 		return sprintf(buf, "%d\n", size_buf[1]);
-	if(attr == (&buf1_attribute))
+	if(attr == (&buf0_attribute))
 		return sprintf(buf, "%llx\n", dmaddr_buf[0]);
-	if(attr == (&buf2_attribute))
+	if(attr == (&buf1_attribute))
 		return sprintf(buf, "%llx\n", dmaddr_buf[1]);
 	return -EINVAL;
 }
 
+/**
+ * @brief     	Based on the value of attr the correct kernel variable is updated
+ */
 static ssize_t attr_store(struct kobject *kobj, struct kobj_attribute *attr , const char *buf, size_t count)
 {
 	int ret = 0;
-	if(attr == (&size_buf1_attribute))
+	if(attr == (&size_buf0_attribute))
 		ret = kstrtoint(buf, 10, &size_buf[0]);
-	else if(attr == (&size_buf2_attribute))
+	else if(attr == (&size_buf1_attribute))
 		ret = kstrtoint(buf, 10, &size_buf[1]);
 	else if(attr == (&reg_inter_attribute))
 		ret = kstrtoint(buf, 10, &pid_user);
@@ -82,28 +86,42 @@ static ssize_t attr_store(struct kobject *kobj, struct kobj_attribute *attr , co
 		return ret;
 	return count;
 }
+
+//attribute array makes it easier to add attributes to /sys
 static struct attribute *attrs[] = {
+	&size_buf0_attribute.attr,
 	&size_buf1_attribute.attr,
-	&size_buf2_attribute.attr,
+	&buf0_attribute.attr,
 	&buf1_attribute.attr,
-	&buf2_attribute.attr,
 	&reg_inter_attribute.attr,
 	NULL,	/* need to NULL terminate the list of attributes */
 };
+//pack the attribute array into an attribute group 
 static struct attribute_group attr_group = {
 	.attrs = attrs,
 };
+//the form in which it is to be added to struct class 
 static const struct attribute_group *attrr_group[]={
 	&attr_group,
 	NULL,
 };
 
+/**
+ * @brief      custom function called when /dev/my_pci* is opened
+ */
 static int devfs_open(struct inode *inode , struct file *filp)
 {
 	nonseekable_open(inode , filp);
 	return 0;
 }
 
+/**
+ * @brief     	called when /dev/my_pci* or any character file with
+ * 				MAJOR (major of device) and MINOR in 0 to 9 closed
+ *
+ * @param      inode  The inode
+ * @param      filp   file pointer used to get the inode of the file which is just closed
+ */
 static int devfs_release(struct inode *inode , struct file *filp)
 {
 	uint8_t minor_filp = iminor(filp->f_path.dentry->d_inode) - 3;
@@ -115,6 +133,9 @@ static int devfs_release(struct inode *inode , struct file *filp)
 	}
 	return 0;
 }
+/* 
+ * 
+*/
 static int devfs_mmap(struct file *filp , struct vm_area_struct *vma)
 {
 	uint8_t minor_filp = iminor(filp->f_path.dentry->d_inode);
@@ -142,7 +163,10 @@ static int devfs_mmap(struct file *filp , struct vm_area_struct *vma)
 	}
 	return -EINVAL;
 }
-
+/* Following file operations apply to character device files 
+ * created with major (MAJOR of device allocted at runtime based on the availability)
+ * and minor number in between 0 to 9 as registed during pci probing
+*/
 struct file_operations devfsops = {
 	.owner = THIS_MODULE,
 	.open = devfs_open,

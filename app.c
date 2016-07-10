@@ -113,7 +113,7 @@ void start_sg(uint32_t *bar0,uint32_t first_desc_start,short num)
 	bar0[BAR0_S_AXI_CDMA_TAILDESC_PTR_MSB/4]=0x0;
 }
 
-void start_dmaa(uint32_t *bar0,uint32_t sa,uint32_t da ,uint32_t btt)
+void start_dma(uint32_t *bar0,uint32_t sa,uint32_t da ,uint32_t btt)
 {
 	bar0[BAR0_S_AXI_CDMA_SA/4] = sa;
 	bar0[BAR0_S_AXI_CDMA_SA_MSB/4] = 0;
@@ -125,8 +125,10 @@ void start_dmaa(uint32_t *bar0,uint32_t sa,uint32_t da ,uint32_t btt)
 int main(int argc, char const *argv[])
 {
 	int i,f1,f2,f;
+	FILE *tempf;
 	uint32_t off_f = 0,off_f1 = 0,off_f2 = 0;
 	volatile uint32_t *f1mem,*f2mem,*bmem;
+	uint64_t f1mem_phy , f2mem_phy;
  	dev_t dev1 = MKDEV(244,3),dev2 = MKDEV(244,4);
 	double cpu_time;
 	uint32_t temp = 0;
@@ -136,7 +138,6 @@ int main(int argc, char const *argv[])
 		exit(1);
 	}
 	bmem = mmap (0,BAR0,PROT_WRITE,MAP_SHARED,f,0x0);
-	
 	f1 = open("/dev/my_pci1",O_RDWR);
 	if(f1<0){
 		if(!mknod("/dev/my_pci1",S_IFCHR,dev1)){
@@ -157,6 +158,12 @@ opened:
 		exit(1);
 	}
 opened1:
+	tempf = fopen("/sys/class/my_class/my_pci0/size_buf0","r+");
+	fprintf(tempf, "%d",AXIBAR0);
+	fclose(tempf);
+	tempf = fopen("/sys/class/my_class/my_pci0/size_buf1","r+");
+	fprintf(tempf, "%d",AXIBAR1);
+	fclose(tempf);
 	f1mem = mmap (0,AXIBAR0,PROT_WRITE,MAP_SHARED,f1,0x0);
 	if(f1mem == NULL){
 		printf("mmap /dev/my_pci1 returned NULL\n");
@@ -167,14 +174,25 @@ opened1:
 		printf("mmap /dev/my_pci2 returned NULL\n");
 		exit(1);
 	}
+	tempf = fopen("/sys/class/my_class/my_pci0/buf0","r");
+	fscanf(tempf, "%lx",&f1mem_phy);
+	fclose(tempf);
+	tempf = fopen("/sys/class/my_class/my_pci0/buf1","r");
+	fscanf(tempf, "%lx",&f2mem_phy);
+	fclose(tempf);
+	tempf = fopen("/sys/class/my_class/my_pci0/reg_interrupt","r+");
+	fprintf(tempf, "%d",getpid());
+	fclose(tempf);
 	signal(SIGUSR1,my_action);
 
 //////////////////////////// CUSTOM LOGIC ////////////////////////
 
-	begin = clock();
+
 
 ////////////////////////////	          ////////////////////////
-	printf("Bravo!!!!!! time elapsed since inception : %.4f \n",(float)(begin - end)/CLOCKS_PER_SEC );
+	begin = clock();
+	while(!conditio);
+	printf("Bravo!!!!!! time elapsed since inception : %.6f \n",(float)(begin - end)/CLOCKS_PER_SEC );
 	close (f2);
 	close (f1);
 	close (f);
