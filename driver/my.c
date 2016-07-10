@@ -9,13 +9,8 @@
 #include <linux/cdev.h>
 #include <linux/mm.h>
 #include <linux/pci.h>
-#include <asm/io.h>
 #include <linux/interrupt.h>
-#include <asm/uaccess.h>
-#include <linux/mod_devicetable.h>
-#include <linux/signal.h>
 #include <asm/cacheflush.h>
-//#include <asm/siginfo.h>
 #include <linux/sched.h>
 //PCI IDs below are not registered! Use only for experiments 
 
