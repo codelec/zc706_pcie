@@ -9,8 +9,7 @@
 #include <stdbool.h>
 #include <time.h>
 #include <signal.h>
-
-#define MKDEV(ma,mi)  (((ma) << 20) | (mi))
+#include <sys/sysmacros.h>
 
 #define BAR0_S_AXI_CDMA_CDMACR 0x8000
 #define BAR0_S_AXI_CDMA_CDMASR 0x8004
@@ -93,7 +92,7 @@ void build_store_desc(uint32_t *store_desc_at,uint32_t nxt,uint32_t sa,uint32_t 
 void print_data(uint32_t *offset,uint32_t base,int count)
 {
 	int i;
-	for (i = 0x0; i <= count; i+=4)
+	for (i = 0x0; i < count; i+=4)
 		printf("%08x : %08x\n",base + i,offset[i/4]);
 }
 
@@ -125,11 +124,13 @@ void start_dma(uint32_t *bar0,uint32_t sa,uint32_t da ,uint32_t btt)
 int main(int argc, char const *argv[])
 {
 	int i,f1,f2,f;
+	float sizee = 0;
 	FILE *tempf;
 	uint32_t off_f = 0,off_f1 = 0,off_f2 = 0;
 	volatile uint32_t *f1mem,*f2mem,*bmem;
 	uint64_t f1mem_phy , f2mem_phy;
- 	dev_t dev1 = MKDEV(244,3),dev2 = MKDEV(244,4);
+	dev_t dev1 = makedev(244,3);
+	dev_t dev2 = makedev(244,4);
 	double cpu_time;
 	uint32_t temp = 0;
 	f = open("/dev/my_pci0",O_RDWR);
@@ -138,11 +139,16 @@ int main(int argc, char const *argv[])
 		exit(1);
 	}
 	bmem = mmap (0,BAR0,PROT_WRITE,MAP_SHARED,f,0x0);
+	if(bmem == NULL){
+		printf("mmap /dev/my_pci0 returned NULL\n");
+		exit(1);
+	}
 	f1 = open("/dev/my_pci1",O_RDWR);
 	if(f1<0){
-		if(!mknod("/dev/my_pci1",S_IFCHR,dev1)){
+		if(!mknod("/dev/my_pci1",S_IFCHR | 0660,dev1)){
 			f1 = open("/dev/my_pci1",O_RDWR);
-			goto opened;
+			if(f1 > 0)
+				goto opened;
 		}
 		printf("Can't open the file /dev/my_pci1\n");
 		exit(1);
@@ -150,9 +156,10 @@ int main(int argc, char const *argv[])
 opened:	
 	f2 = open("/dev/my_pci2",O_RDWR);
 	if(f2<0){
-		if(!mknod("/dev/my_pci2",S_IFCHR,dev2)){
+		if(!mknod("/dev/my_pci2",S_IFCHR | 0660,dev2)){
 			f2 = open("/dev/my_pci2",O_RDWR);
-			goto opened1;
+			if(f2 > 0)
+				goto opened;
 		}
 		printf("Can't open the file /dev/my_pci2\n");
 		exit(1);
@@ -175,16 +182,16 @@ opened1:
 		exit(1);
 	}
 	tempf = fopen("/sys/class/my_class/my_pci0/buf0","r");
-	fscanf(tempf, "%lx",&f1mem_phy);
+	fscanf(tempf, "%llx",&f1mem_phy);
 	fclose(tempf);
 	tempf = fopen("/sys/class/my_class/my_pci0/buf1","r");
-	fscanf(tempf, "%lx",&f2mem_phy);
+	fscanf(tempf, "%llx",&f2mem_phy);
 	fclose(tempf);
 	tempf = fopen("/sys/class/my_class/my_pci0/reg_interrupt","r+");
 	fprintf(tempf, "%d",getpid());
 	fclose(tempf);
 	signal(SIGUSR1,my_action);
-
+	printf("CDMA STATUS : %x\n",bmem[BAR0_S_AXI_CDMA_CDMASR/4]);
 //////////////////////////// CUSTOM LOGIC ////////////////////////
 
 
@@ -192,7 +199,9 @@ opened1:
 ////////////////////////////	          ////////////////////////
 	begin = clock();
 	while(!conditio);
-	printf("Bravo!!!!!! time elapsed since inception : %.6f \n",(float)(begin - end)/CLOCKS_PER_SEC );
+	sizee = (float)BAR0 / (1024*1024*1024);
+	float timee = (float)(end - begin)/CLOCKS_PER_SEC;
+	printf("Success:%x Bravo!!!!!! Time elapsed since inception : %.6f SPEED:%.4fGiB/s\n",bmem[BAR0_S_AXI_CDMA_CDMASR/4],timee , sizee/timee);
 	close (f2);
 	close (f1);
 	close (f);

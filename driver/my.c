@@ -63,6 +63,8 @@ static ssize_t attr_show(struct kobject *kobj, struct kobj_attribute *attr , cha
 		return sprintf(buf, "%d\n", size_buf[0]);
 	if(attr == (&size_buf1_attribute))
 		return sprintf(buf, "%d\n", size_buf[1]);
+	if(attr == (&reg_inter_attribute))
+		return sprintf(buf, "%d\n", pid_user);
 	if(attr == (&buf0_attribute))
 		return sprintf(buf, "%llx\n", dmaddr_buf[0]);
 	if(attr == (&buf1_attribute))
@@ -118,39 +120,54 @@ static int devfs_open(struct inode *inode , struct file *filp)
 /**
  * @brief     	called when /dev/my_pci* or any character file with
  * 				MAJOR (major of device) and MINOR in 0 to 9 closed
+ * 				It releases the buffer on RAM that is allocated by
+ * 				only for files when they are mmaped who have a 
+ * 				minor number of >=3 
  *
  * @param      inode  The inode
  * @param      filp   file pointer used to get the inode of the file which is just closed
  */
 static int devfs_release(struct inode *inode , struct file *filp)
 {
-	uint8_t minor_filp = iminor(filp->f_path.dentry->d_inode) - 3;
-	if(minor_filp >= 0){
+	short minor_filp = iminor(filp->f_path.dentry->d_inode) - 3; //detects the minor number from the inode  
+	if((minor_filp >= 0) && (dmakvirt_buf[minor_filp] != NULL)){
+		//before releasing the buffer the memory type should be changed back to write back 
 		if(!set_memory_wb((unsigned long )dmakvirt_buf[minor_filp],size_buf[minor_filp] >> PAGE_SHIFT))
 			printk("ATTR of %d changed back to WB !!\n",minor_filp);
+		//free the buffer using the api that allocated it 
 		dma_free_coherent(&glob_pci->dev,size_buf[minor_filp],dmakvirt_buf[minor_filp],dmaddr_buf[minor_filp]);
 		printk("DMA Descriptor buffer %d free'ed\n",minor_filp);
 	}
 	return 0;
 }
-/* 
- * 
-*/
+/*
+ * @brief      Based on the minor number of the file it is detected whether the PCIE BAR(0,1,2) or RAM BUFFER(3,4,5,6,7,8)
+ * 				should mapped into the given virtual memory area . 
+ * 				Incase of RAM Buffer the allocated memory type is changed to uncached  
+ * 				 
+ *
+ * @param      filp  The filp
+ * @param      vma   Virtual Memory Address pointer in which space the newly allocated 
+ * 					buffer would be mapped into for the user 
+ *
+ * @return    0 on success or -EINVAL on invalid request or -ENOMEM incase of not enough memory available 
+ */
 static int devfs_mmap(struct file *filp , struct vm_area_struct *vma)
 {
-	uint8_t minor_filp = iminor(filp->f_path.dentry->d_inode);
+	short minor_filp = iminor(filp->f_path.dentry->d_inode);
 	unsigned long vsize ;
 	vsize = vma->vm_end - vma->vm_start ;
 	if(minor_filp<3){
 		if(vsize > mmio_len[minor_filp])
 			return -EINVAL;
 		io_remap_pfn_range(vma,vma->vm_start, (mmio_start[minor_filp]) >> PAGE_SHIFT , vsize, vma->vm_page_prot);
-		printk ("<1>BAR%u seems to be mapped\n",minor_filp);	
+		printk ("<1>BAR%u Start:%llx Vsize:%lu seems to be mapped\n",minor_filp,mmio_start[minor_filp],vsize);	
+		return 0;	
 	}
 	else {
 		uint8_t minor_temp = minor_filp - 3;
 		dmakvirt_buf[minor_temp] = dma_alloc_coherent(&glob_pci->dev,size_buf[minor_temp],&dmaddr_buf[minor_temp],GFP_USER);
-		if((dmakvirt_buf[minor_filp]==NULL) || (vsize > size_buf[minor_temp])){
+		if((dmakvirt_buf[minor_temp]==NULL) || (vsize > size_buf[minor_temp])){
 			printk(KERN_ERR "No DMA buffer %d allocated or Invalid mmap size\n",minor_temp);
 			return -ENOMEM;
 		}
@@ -163,16 +180,22 @@ static int devfs_mmap(struct file *filp , struct vm_area_struct *vma)
 	}
 	return -EINVAL;
 }
-/* Following file operations apply to character device files 
- * created with major (MAJOR of device allocted at runtime based on the availability)
- * and minor number in between 0 to 9 as registed during pci probing
-*/
+/* Following file operations apply to character device files created with major
+ * (MAJOR of device allocted at runtime based on the availability) and minor
+ * number in between 0 to 9 as registed during pci probing
+ */
 struct file_operations devfsops = {
 	.owner = THIS_MODULE,
 	.open = devfs_open,
 	.mmap = devfs_mmap,
 	.release = devfs_release
 };
+
+/**
+ * @brief      Sends the signal to user space process which has registered with its pid in the reg_interrupt var 
+ *				if incase an invalid pid is found just to indicate an error at 0 location data is written  
+ *				so that it can be debugged
+ */
 static irqreturn_t irq_handler(int irq,void *dev_id)
 {
 	task = pid_task(find_vpid(pid_user),PIDTYPE_PID);
@@ -183,22 +206,31 @@ static irqreturn_t irq_handler(int irq,void *dev_id)
 	return IRQ_HANDLED;
 }
 
+
+
+/**
+ * @brief      The function is executed when a valid PCI device is detected with the same DEVICE and VENDOR ID as 
+ * 				registered in the device table 
+ *
+ */
 static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 {
 	int i , res = -1;
 	glob_pci = pdev;
+	//just the wakes the device 
 	if(pci_enable_device(pdev))
 	{
 		dev_err(&pdev->dev,"Can't enable PCI device , aborting\n");
 		goto err1;
 	}
-	//For now seperate threaded function not enabled
 	pci_enable_msi(pdev);
+	//For now seperate threaded function not enabled 
 	if(request_irq(pdev->irq, irq_handler, 0, "MY_PCI_FPGA_CARD", pdev))
 		printk( "IRQ:%d not registerd ",pdev->irq);
-	printk ("<1>after irq \n");
 	for(i=0;i<N_OF_RES;i++)
 	{
+		//pci_reasource_* corresponds to accessing BAR characteristics
+		//such as the base address , length and flags 
 		mmio_start[i]=pci_resource_start(pdev,res_nums[i]);
 		mmio_end[i]=pci_resource_end(pdev,res_nums[i]);
 		mmio_flags[i]=pci_resource_flags(pdev,res_nums[i]);
@@ -211,6 +243,9 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 			goto err1;
 		}
 	}
+	//dma mask used to indicate how many bits of the DMA address can the device flip 
+	//in this case it is set to 64 since the DMA address generated is memory mapped 
+	//by AXI MEMORY MAPPED PCIE to host 64 bit address 
 	if(dma_set_mask_and_coherent(&(pdev->dev),DMA_BIT_MASK(64))){
 		if(dma_set_mask_and_coherent(&(pdev->dev),DMA_BIT_MASK(32)))
 		dev_info(&pdev->dev,"Unable to obtain 64bit dma for consistent allocations \n");
@@ -303,7 +338,6 @@ static struct pci_driver my_pci_driver = {
 
 static int __init my_pci_init(void)
 {
-	printk("inserted my\n");
 	return pci_register_driver(&my_pci_driver);
 }
 static void __exit my_pci_exit(void)
