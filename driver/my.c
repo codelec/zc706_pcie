@@ -254,7 +254,10 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 	res = pci_request_regions(pdev,DEVICE_NAME);
 	if(res)
 		goto err1;
+	//set the bus master bit in the configuration space so that EP can also generate 
+	//Write or Read TLP 
 	pci_set_master(pdev);
+	//mapping the IO as MMIO
 	bmem = ioremap(mmio_start[0],mmio_len[0]);
 	if(!bmem){
 		printk(KERN_ERR "Mapping of memory for %s BAR%d failed",
@@ -267,15 +270,20 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 		printk( "Either not able to read or SG not configured \n");
 		goto err1;
 	}
+	//Create a device class owned by this module 
 	my_class = class_create(THIS_MODULE,"my_class");
 	if(IS_ERR(my_class)){
 		printk(KERN_ERR "Error creating my_class class \n");
 		res = PTR_ERR(my_class);
 		goto err1;
 	}
+	//add the attribute group to the class so that any device created 
+	//under this class will show these attributes in its folder 
 	if(!(my_class -> dev_groups))
 		my_class -> dev_groups = attrr_group;
-	res = alloc_chrdev_region(&my_dev,0,10,DEVICE_NAME);
+	//allocate character device region that is a set of minors numbers
+	//9 is not included that is 0-8 is reserved for this device
+	res = alloc_chrdev_region(&my_dev,0,9,DEVICE_NAME);
 	if(res){
 		printk (KERN_ERR " Allocation of the device number for %s failed\n",DEVICE_NAME);
 		goto err1;
@@ -287,7 +295,7 @@ static int my_pci_probe(struct pci_dev *pdev , const struct pci_device_id *ent)
 	}
 	my_cdev -> ops = &devfsops ;
 	my_cdev -> owner = THIS_MODULE;
-	res = cdev_add (my_cdev , my_dev , 10);
+	res = cdev_add (my_cdev , my_dev , 9);
 	if(res){
 		printk(KERN_ERR " Registration of the device number for %s failed \n",DEVICE_NAME);
 		goto err1;
