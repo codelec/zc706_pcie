@@ -27,16 +27,6 @@
 #define BAR0_S_AXI_CDMA_DA_MSB 0x8024
 #define BAR0_S_AXI_CDMA_BTT 0x8028
 
-#define BAR0_S_AXI_PCIE_AXIBAR0 0x920C
-#define BAR0_S_AXI_PCIE_AXIBAR0_MSB 0x9208
-#define BAR0_S_AXI_PCIE_AXIBAR1 0x9214
-#define BAR0_S_AXI_PCIE_AXIBAR1_MSB 0x9210
-
-#define CDMA_S_AXI_PCIE_AXIBAR0 0x4100920C
-#define CDMA_S_AXI_PCIE_AXIBAR0_MSB 0x41009208
-#define CDMA_S_AXI_PCIE_AXIBAR1 0x41009214
-#define CDMA_S_AXI_PCIE_AXIBAR1_MSB 0x41009210
-
 #define CDMA_DESC_NEXTDESC_PTR 0x00
 #define CDMA_DESC_NEXTDESC_PTR_MSB 0x04
 #define CDMA_DESC_SA 0x08
@@ -255,10 +245,10 @@ opened1:
 		exit(1);
 	}
 	tempf = fopen("/sys/class/my_class/my_pci0/buf0","r");
-	fscanf(tempf, "%llx",&f1mem_phy);
+	fscanf(tempf, "%lx",&f1mem_phy);
 	fclose(tempf);
 	tempf = fopen("/sys/class/my_class/my_pci0/buf1","r");
-	fscanf(tempf, "%llx",&f2mem_phy);
+	fscanf(tempf, "%lx",&f2mem_phy);
 	fclose(tempf);
 	tempf = fopen("/sys/class/my_class/my_pci0/reg_interrupt","r+");
 	fprintf(tempf, "%d",getpid());
